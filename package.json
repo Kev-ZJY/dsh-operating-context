@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "description": "DeepSeek Harness settings page: cap every configured model service to a working context window, clamped to what each model can actually hold",
   "license": "MIT",
-  "homepage": "https://github.com/AIMFllyYS/dsh-operating-context",
+  "homepage": "https://github.com/Kev-ZJY/dsh-operating-context",
   "bugs": {
-    "url": "https://github.com/AIMFllyYS/dsh-operating-context/issues"
+    "url": "https://github.com/Kev-ZJY/dsh-operating-context/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AIMFllyYS/dsh-operating-context.git"
+    "url": "git+https://github.com/Kev-ZJY/dsh-operating-context.git"
   },
   "type": "module",
   "main": "lib/index.js",
