@@ -111,6 +111,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
       expandOnRowClick?: boolean
       children?: ReactNode
       className?: string | undefined
+      rowClassName?: string | undefined
       titleClassName?: string | undefined
     },
   ): ReactNode

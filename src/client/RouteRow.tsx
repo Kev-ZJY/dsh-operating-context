@@ -81,7 +81,8 @@ export function RouteRow(props: RouteRowProps): ReactNode {
         expandOnRowClick
         onToggle={() => setOpen(current => !current)}
         titleClassName={styles.routeName}
-        className={styles.routeHead}
+        className={styles.routeHeadRoot}
+        rowClassName={styles.routeHead}
       >
         <div className={styles.routeSummary}>
           {fill(t('providerModelsLabel'), { count: String(models.length) })}

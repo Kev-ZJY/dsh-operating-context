@@ -113,6 +113,13 @@
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
+/* DisclosureRow root wrapper: block container holding the row and the
+ * expanded body. No box styling here — the provider groups carry their own
+ * separators. */
+.routeHeadRoot {
+  display: block;
+}
+
 .routeHead {
   display: flex;
   align-items: center;
@@ -222,8 +229,8 @@
 
 /* Color feedback: unmodified = default border, modified = blue */
 .dropdownTrigger.modified {
-  border-color: var(--dsw-alias-primary-l6, #3b82f6);
-  box-shadow: 0 0 0 1px var(--dsw-alias-primary-l6, #3b82f6);
+  border-color: var(--dsw-alias-state-business-primary, #3b82f6);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #3b82f6);
 }
 
 .dropdownValue {
@@ -241,7 +248,10 @@
   min-width: 140px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
-  background: var(--dsw-alias-bg-raised);
+  /* Opaque surface: --dsw-alias-bg-raised does not exist in the theme, so the
+   * menu used to render fully transparent and rows below showed through.
+   * --dsw-specific-menu is the theme's own menu surface token. */
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3));
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   padding: 4px;
   display: flex;
@@ -275,7 +285,7 @@
 
 .dropdownItem.selected {
   font-weight: 600;
-  color: var(--dsw-alias-primary-l6, #3b82f6);
+  color: var(--dsw-alias-state-business-primary, #3b82f6);
 }
 
 .dropdownCustom {
@@ -308,8 +318,8 @@
 }
 
 .dropdownCustomInput:focus {
-  border-color: var(--dsw-alias-primary-l6, #3b82f6);
-  box-shadow: 0 0 0 1px var(--dsw-alias-primary-l6, #3b82f6);
+  border-color: var(--dsw-alias-state-business-primary, #3b82f6);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #3b82f6);
 }
 
 /* Legacy classes kept for backward compatibility */
