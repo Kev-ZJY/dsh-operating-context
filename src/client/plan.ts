@@ -184,3 +184,121 @@ export function planRoute(entry: RouteProfile, target: number): PathOp[] {
   }
   return ops
 }
+
+/**
+ * The settings mutations that apply per-model window choices to one route.
+ * Each model gets its own target; a model absent from the map keeps its current
+ * value. The `defaultContextWindow` is set to the most common target among the
+ * specified models so models without a custom choice get a reasonable default.
+ *
+ * @param entry - the route joined with its profile and disclosed capacities.
+ * @param modelWindows - per-model target windows (only models whose values differ
+ * from the current effective window need to be listed).
+ * @returns path operations for this route, addressed from its namespace root.
+ */
+export function planRouteWithModels(
+  entry: RouteProfile,
+  modelWindows: ReadonlyMap<string, number>,
+): PathOp[] {
+  const at = (...tail: string[]): string[] => [...entry.route.settingsPath, ...tail]
+  const ops: PathOp[] = []
+  const ceilings = ceilingMap(entry)
+  const rows = modelRows(entry.profile)
+
+  // For catalog routes (no custom models list), use modelOverrides.
+  if (rows === undefined) {
+    const { defaultContextWindow: currentDefault } = asProfile(entry.profile)
+    const currentDefaultNum = typeof currentDefault === 'number'
+      && Number.isSafeInteger(currentDefault) && currentDefault > 0
+      ? currentDefault
+      : undefined
+
+    // Determine the new default: most common target among specified models,
+    // falling back to current default.
+    const targetCounts = new Map<number, number>()
+    for (const [, target] of modelWindows) {
+      targetCounts.set(target, (targetCounts.get(target) ?? 0) + 1)
+    }
+    let newDefault = currentDefaultNum
+    if (modelWindows.size > 0) {
+      let maxCount = 0
+      for (const [target, count] of targetCounts) {
+        if (count > maxCount) { maxCount = count; newDefault = target }
+      }
+    }
+    // Ensure newDefault is always defined (fallback to 256K).
+    if (newDefault === undefined) newDefault = 262_144
+    ops.push({ op: 'set', path: at('defaultContextWindow'), value: newDefault })
+
+    // For each model with a specified target, decide whether to set or remove
+    // the override. The natural effective value (without override) is:
+    //   min(default, ceiling) when ceiling known, else default.
+    // We need an override only when target != natural effective value.
+    for (const [id, target] of modelWindows) {
+      const ceiling = ceilings.get(id)
+      const naturalEffective = ceiling !== undefined ? Math.min(newDefault, ceiling) : newDefault
+      const existing = overrideEntry(entry.profile, id)
+
+      if (target === naturalEffective) {
+        // Target matches natural value — no override needed, remove existing one.
+        if (existing?.['contextWindow'] !== undefined) {
+          ops.push(Object.keys(existing).length === 1
+            ? { op: 'unset', path: at('modelOverrides', id) }
+            : { op: 'unset', path: at('modelOverrides', id, 'contextWindow') })
+        }
+      } else {
+        // Target differs — write override.
+        ops.push({ op: 'set', path: at('modelOverrides', id, 'contextWindow'), value: target })
+      }
+    }
+
+    // Clean up obsolete overrides (models no longer in the catalog).
+    for (const id of obsoleteOverrideIds(entry)) {
+      if (!modelWindows.has(id)) {
+        ops.push({ op: 'unset', path: at('modelOverrides', id) })
+      }
+    }
+  } else {
+    // Custom models list: update rows in place.
+    const targetOrDefault = newDefaultForRows(modelWindows, entry)
+    ops.push({ op: 'set', path: at('defaultContextWindow'), value: targetOrDefault })
+    ops.push({
+      op: 'set',
+      path: at('models'),
+      value: rows.map((row) => {
+        const id = typeof row['id'] === 'string' ? row['id'] : undefined
+        const ceiling = id === undefined ? undefined : ceilings.get(id)
+        const target = id !== undefined ? modelWindows.get(id) : undefined
+        const resolved = target ?? effectiveWindow(targetOrDefault, ceiling)
+        return { ...row, contextWindow: effectiveWindow(resolved, ceiling) }
+      }),
+    })
+  }
+  return ops
+}
+
+/**
+ * Compute the default context window for routes with custom models[] when
+ * per-model targets are specified.
+ */
+function newDefaultForRows(
+  modelWindows: ReadonlyMap<string, number>,
+  entry: RouteProfile,
+): number {
+  const { defaultContextWindow: currentDefault } = asProfile(entry.profile)
+  const currentDefaultNum = typeof currentDefault === 'number'
+    && Number.isSafeInteger(currentDefault) && currentDefault > 0
+    ? currentDefault
+    : 262_144
+
+  const targetCounts = new Map<number, number>()
+  for (const [, target] of modelWindows) {
+    targetCounts.set(target, (targetCounts.get(target) ?? 0) + 1)
+  }
+  let best = currentDefaultNum
+  let maxCount = 0
+  for (const [target, count] of targetCounts) {
+    if (count > maxCount) { maxCount = count; best = target }
+  }
+  return best
+}

@@ -50,6 +50,19 @@ export const zh = {
   downgradeTitle: '{count} 个模型上限更低',
   downgradeHint: '这些模型最多只能到各自的上限，更大的窗口对它们不起作用。',
   modelCeiling: '最高 {window}',
+
+  // Provider group / model list UI
+  providerGroupLabel: '已配置的模型服务',
+  providerModelsLabel: '{count} 个模型',
+  providerNoModels: '无法读取模型列表',
+  modelWindowLabel: '上下文窗口',
+  modelDropdownPlaceholder: '选择窗口大小',
+  modelDropdownCustom: '自定义…',
+  providerSave: '保存',
+  providerSaving: '保存中…',
+  providerSaved: '已保存。',
+  providerSaveFailed: '保存失败：{message}',
+  providerNoChanges: '没有修改需要保存',
 } satisfies Record<string, string>
 
 /** Operating-context locale key union. */
@@ -90,4 +103,17 @@ export const en = {
   downgradeTitle: '{count} models have a lower limit',
   downgradeHint: 'These models cannot go past their own limit, so a larger window has no effect on them.',
   modelCeiling: 'up to {window}',
+
+  // Provider group / model list UI
+  providerGroupLabel: 'Configured model services',
+  providerModelsLabel: '{count} model(s)',
+  providerNoModels: 'Could not read model list',
+  modelWindowLabel: 'Context window',
+  modelDropdownPlaceholder: 'Select window size',
+  modelDropdownCustom: 'Custom…',
+  providerSave: 'Save',
+  providerSaving: 'Saving…',
+  providerSaved: 'Saved.',
+  providerSaveFailed: 'Save failed: {message}',
+  providerNoChanges: 'No changes to save',
 } satisfies Record<OperatingContextKey, string>

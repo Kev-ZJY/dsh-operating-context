@@ -13,7 +13,7 @@ import {
 } from './api.ts'
 import { ceilingsOf, hasDiscoverableCeilings, routeKey } from './ceiling.ts'
 import { failureOf, WRITE_BLOCKED, type HostFailure } from './failure.ts'
-import { commonRequestedWindow, effectiveWindows, planRoute, type RouteProfile } from './plan.ts'
+import { commonRequestedWindow, effectiveWindows, planRoute, planRouteWithModels, type RouteProfile } from './plan.ts'
 import { writeBatches } from './write.ts'
 
 /** One configured route the page can show and write. */
@@ -42,6 +42,10 @@ export interface OperatingContextState {
   current: number | undefined
   /** Whether models currently disagree about the window in force. */
   mixed: boolean
+  /** Per-route save status: 'saving' | 'ok' | null, keyed by route key. */
+  routeSaveResult: Record<string, 'saving' | 'ok' | null>
+  /** Per-route save error message, keyed by route key. */
+  routeSaveError: Record<string, string | null>
 }
 
 const INITIAL: OperatingContextState = {
@@ -56,6 +60,8 @@ const INITIAL: OperatingContextState = {
   selectedWindow: undefined,
   current: undefined,
   mixed: false,
+  routeSaveResult: {},
+  routeSaveError: {},
 }
 
 /** Reads the configured routes, and writes a chosen window across all of them. */
@@ -107,11 +113,12 @@ export class OperatingContextStore {
       }
       const routes: RouteEntry[] = await Promise.all(configured.map(async ({ route, profile }) => {
         const discovered = await this.describeCeilings(route)
+        const allModels = await this.discoverAllModels(route)
         return {
           key: routeKey(route),
           route,
           profile,
-          discovered: discovered ?? [],
+          discovered: discovered ?? allModels.length > 0 ? allModels : [],
           ceilingsKnown: discovered !== undefined,
         }
       }))
@@ -153,6 +160,19 @@ export class OperatingContextStore {
       draft.savedWindow = null
       draft.writeFailure = null
       draft.partialWrite = null
+    })
+  }
+
+  /** Dismiss per-route save feedback. */
+  clearRouteSaveFeedback(key?: string): void {
+    this.store.update((draft) => {
+      if (key !== undefined) {
+        draft.routeSaveResult[key] = null
+        draft.routeSaveError[key] = null
+      } else {
+        draft.routeSaveResult = {}
+        draft.routeSaveError = {}
+      }
     })
   }
 
@@ -247,6 +267,62 @@ export class OperatingContextStore {
   }
 
   /**
+   * Apply per-model window changes for a single route. This writes modelOverrides
+   * and updates defaultContextWindow for that route only.
+   * @param routeKey - the stable key of the route to save.
+   * @param modelWindows - per-model target windows.
+   * @returns nothing; the outcome lands in the snapshot.
+   */
+  async applyModels(routeKey: string, modelWindows: ReadonlyMap<string, number>): Promise<void> {
+    this.store.update((draft) => {
+      draft.routeSaveResult[routeKey] = 'saving'
+      draft.routeSaveError[routeKey] = null
+    })
+    try {
+      const document = unwrap(await this.api.settings.describe({}))
+      if (!document.writable) {
+        throw new CodedError('the settings document is read-only', WRITE_BLOCKED.readOnly)
+      }
+      if (modelWindows.size === 0) {
+        throw new CodedError('no model changes to apply', WRITE_BLOCKED.noRoutes)
+      }
+      const namespaces = new Map(document.namespaces.map(view => [view.ns, view]))
+      const entry = this.store.getSnapshot().routes.find(r => r.key === routeKey)
+      if (entry === undefined) {
+        throw new CodedError('route not found', WRITE_BLOCKED.noRoutes)
+      }
+      const namespace = namespaces.get(entry.route.settingsNs)
+      if (namespace === undefined) {
+        throw new CodedError('namespace not found', WRITE_BLOCKED.noRoutes)
+      }
+      const profile = getPath(namespace.value, entry.route.settingsPath)
+      if (profile === undefined) {
+        throw new CodedError('profile not found', WRITE_BLOCKED.noRoutes)
+      }
+      const ops = planRouteWithModels({ ...entry, profile }, modelWindows)
+      unwrap(await this.api.settings.mutate({
+        ns: namespace.ns,
+        ops,
+        expectedRevision: namespace.revision,
+      }))
+      // Reload to get fresh state after the write.
+      await this.load()
+      this.store.update((draft) => {
+        draft.routeSaveResult[routeKey] = 'ok'
+        draft.routeSaveError[routeKey] = null
+      })
+    } catch (reason: unknown) {
+      const failure = failureOf(reason)
+      // Reload on conflict so the page shows fresh state.
+      if (failure.code === 'settings-conflict') await this.load()
+      this.store.update((draft) => {
+        draft.routeSaveResult[routeKey] = null
+        draft.routeSaveError[routeKey] = failure.message
+      })
+    }
+  }
+
+  /**
    * Ask the adapter for a route's native capacities, but only when the answer
    * comes from local data. `undefined` means the ceilings are unknown, which the
    * page reports rather than papering over with a default.
@@ -267,6 +343,27 @@ export class OperatingContextStore {
       // A route that cannot describe itself is reported as unknown, not as an
       // error: the rest of the page is still usable and still writable.
       return undefined
+    }
+  }
+
+  /**
+   * Try to discover models for ALL routes, including non-pi-ai ones. Unlike
+   * {@link describeCeilings}, this does not require local catalog data and may
+   * make a network request for external providers. Returns the model list even
+   * when ceilings are not authoritative.
+   */
+  private async discoverAllModels(
+    route: ProviderTarget,
+  ): Promise<readonly DiscoveredModel[]> {
+    if (typeof this.api.llm.discoverModels !== 'function') return []
+    try {
+      const answer = await this.api.llm.discoverModels({
+        settingsNs: route.settingsNs,
+        provider: route.provider,
+      })
+      return unwrap(answer).models
+    } catch {
+      return []
     }
   }
 }

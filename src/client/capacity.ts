@@ -18,6 +18,24 @@ export const WINDOW_PRESETS = [
 ] as const
 
 /**
+ * Check if a value matches one of the preset options and return its label.
+ * @param tokens - the token count to match.
+ * @returns the preset label, or `undefined` if not a preset value.
+ */
+export function presetLabel(tokens: number): string | undefined {
+  return WINDOW_PRESETS.find(p => p.tokens === tokens)?.label
+}
+
+/**
+ * Parse a capacity from dropdown input: either a preset token count (number)
+ * or a custom string like "128K". Returns a valid positive integer or undefined.
+ */
+export function resolveWindow(value: string | number): number | undefined {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : undefined
+  return parseCapacity(value)
+}
+
+/**
  * Read a typed capacity, so a user can write `256K` or `1M` instead of counting
  * zeroes. The stored value stays a plain token count.
  * @param text - raw field text.

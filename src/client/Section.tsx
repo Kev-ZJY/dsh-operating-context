@@ -1,17 +1,13 @@
 /**
- * The operating-window settings page: pick one window, see what it means for
- * each configured service, apply it everywhere.
- *
- * Page-wide facts live in the store; the only local state is the unsubmitted
- * choice, which nothing outside this component needs to read.
+ * The operating-window settings page: per-model context window controls
+ * grouped by provider. Each provider group is collapsible (default collapsed)
+ * and contains per-model dropdown selectors with a save button at the bottom.
  */
-import { useEffect, useState, type ReactNode } from 'react'
-import { Button, Input, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
-import { formatCapacity, parseCapacity, WINDOW_PRESETS } from './capacity.ts'
-import { outcomeOf, type RouteOutcome } from './ceiling.ts'
+import { useCallback, useEffect, type ReactNode } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { formatCapacity } from './capacity.ts'
 import { writeFailureText } from './failure.ts'
 import { fill, type OperatingContextKey } from './locales.ts'
-import { obsoleteOverrideIds } from './plan.ts'
 import { RouteRow } from './RouteRow.tsx'
 import styles from './Section.module.css'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
@@ -27,16 +23,35 @@ export interface OperatingContextInjected {
 /** Props delivered by the slot outlet, which cannot promise the inject face. */
 export type OperatingContextSectionProps = Partial<OperatingContextInjected>
 
-/** The choice the user has made but not yet applied. */
-interface Draft {
-  /** Chosen preset, or `undefined` to follow whatever is already in force. */
-  preset: number | undefined
-  /** Whether the custom field is the active choice. */
-  custom: boolean
-  customText: string
-}
+/**
+ * Compute the baseline effective window per model for one route entry.
+ * This reads the current effective value from the profile (override >> default).
+ */
+function computeBaseline(entry: { profile: unknown; discovered: readonly { id: string }[] }): Map<string, number> {
+  const baseline = new Map<string, number>()
+  if (typeof entry.profile !== 'object' || entry.profile === null) return baseline
 
-const NO_DRAFT: Draft = { preset: undefined, custom: false, customText: '' }
+  const { modelOverrides, defaultContextWindow } = entry.profile as Record<string, unknown>
+  const defaultNum = typeof defaultContextWindow === 'number'
+    && Number.isSafeInteger(defaultContextWindow) && defaultContextWindow > 0
+    ? defaultContextWindow
+    : undefined
+
+  for (const model of entry.discovered) {
+    let value = defaultNum
+    if (typeof modelOverrides === 'object' && modelOverrides !== null) {
+      const override = (modelOverrides as Record<string, unknown>)[model.id]
+      if (typeof override === 'object' && override !== null) {
+        const cw = (override as Record<string, unknown>)['contextWindow']
+        if (typeof cw === 'number') value = cw
+      }
+    }
+    if (value !== undefined) {
+      baseline.set(model.id, value)
+    }
+  }
+  return baseline
+}
 
 /**
  * Render the operating-window section.
@@ -51,48 +66,14 @@ export function OperatingContextSection(props: OperatingContextSectionProps): Re
 
 function Loaded({ controller, useSnapshot, t }: OperatingContextInjected): ReactNode {
   const state = useSnapshot(snapshot => snapshot)
-  const [draft, setDraft] = useState<Draft>(NO_DRAFT)
+
   useEffect(() => {
     if (state.status === 'idle') void controller.load()
   }, [controller, state.status])
 
-  const changeDraft = (next: Draft): void => {
-    controller.clearWriteFeedback()
-    setDraft(next)
-  }
-
-  const typed = draft.custom ? parseCapacity(draft.customText) : undefined
-  const current = state.current !== undefined && Number.isSafeInteger(state.current) && state.current > 0
-    ? state.current
-    : undefined
-  const followsSavedChoice = draft.preset === undefined && !draft.custom
-  const savedChoice = state.selectedWindow
-  const savedChoiceIsPreset = savedChoice !== undefined
-    && WINDOW_PRESETS.some(preset => preset.tokens === savedChoice)
-  const customActive = draft.custom
-    || (followsSavedChoice && savedChoice !== undefined && !savedChoiceIsPreset)
-  const customText = draft.custom
-    ? draft.customText
-    : (customActive && savedChoice !== undefined ? formatCapacity(savedChoice) : draft.customText)
-  const target = draft.custom
-    ? (typed !== undefined && Number.isSafeInteger(typed) && typed > 0 ? typed : undefined)
-    : draft.preset ?? savedChoice ?? current
-  const invalidCustom = draft.custom && draft.customText.trim().length > 0 && target === undefined
-  const displayedWindow = savedChoice ?? current
-
-  const rows: { key: string; displayName: string; outcome: RouteOutcome | undefined }[]
-    = state.routes.map(entry => ({
-      key: entry.key,
-      displayName: entry.route.displayName,
-      outcome: target === undefined
-        ? undefined
-        : outcomeOf(target, entry.discovered, entry.ceilingsKnown),
-    }))
-  const downgraded = rows.reduce((total, row) => total + (row.outcome?.downgraded.length ?? 0), 0)
-  const obsoleteOverrides = state.routes.reduce(
-    (total, entry) => total + obsoleteOverrideIds(entry).length,
-    0,
-  )
+  const handleSave = useCallback((routeKey: string, modelWindows: Map<string, number>) => {
+    void controller.applyModels(routeKey, modelWindows)
+  }, [controller])
 
   if (state.status === 'error') {
     return (
@@ -106,125 +87,57 @@ function Loaded({ controller, useSnapshot, t }: OperatingContextInjected): React
     )
   }
 
+  if (state.status !== 'ready') {
+    return (
+      <div className={styles.section}>
+        <h2 className={styles.title}>{t('title')}</h2>
+        <p className={styles.intro}>{t('intro')}</p>
+      </div>
+    )
+  }
+
   return (
     <div className={styles.section}>
       <h2 className={styles.title}>{t('title')}</h2>
       <p className={styles.intro}>{t('intro')}</p>
 
-      <div className={styles.card}>
-        <div className={styles.head}>
-          <span className={styles.label}>{t('windowLabel')}</span>
-          {displayedWindow === undefined ? null : (
-            <span className={styles.current}>
-              {fill(t('current'), { window: formatCapacity(displayedWindow) })}
-            </span>
-          )}
-        </div>
-        <p className={styles.hint}>{t('windowHint')}</p>
-
-        <div className={styles.chips}>
-          {WINDOW_PRESETS.map(preset => (
-            <Pill
-              key={preset.label}
-              active={!customActive && target === preset.tokens}
-              onClick={() => { changeDraft({ preset: preset.tokens, custom: false, customText: draft.customText }) }}
-            >
-              {preset.label}
-            </Pill>
-          ))}
-          <Pill
-            active={customActive}
-            onClick={() => {
-              changeDraft({ preset: undefined, custom: true, customText })
-            }}
-          >
-            {t('custom')}
-          </Pill>
-        </div>
-
-        {customActive ? (
-          <div className={styles.custom}>
-            <Input
-              value={customText}
-              placeholder={t('customPlaceholder')}
-              aria-label={t('custom')}
-              aria-invalid={invalidCustom}
-              onChange={(event) => {
-                changeDraft({ preset: undefined, custom: true, customText: event.target.value })
-              }}
-            />
-          </div>
-        ) : null}
-        {invalidCustom ? <p className={styles.error}>{t('customInvalid')}</p> : null}
-
-        {/* Once a window is chosen the per-service table explains any spread,
-            and a legitimate clamp is itself a spread — so this only speaks up
-            while nothing has been chosen yet. */}
-        {state.mixed && target === undefined
-          ? <p className={styles.notice}>{t('mixed')}</p>
-          : null}
-        {downgraded > 0 && target !== undefined ? (
-          <p className={styles.notice}>
-            {fill(t('downgradeNotice'), {
-              count: String(downgraded),
-              window: formatCapacity(target),
-            })}
-          </p>
-        ) : null}
-        {obsoleteOverrides > 0 && target !== undefined ? (
-          <p className={styles.notice}>
-            {fill(t('cleanupNotice'), { count: String(obsoleteOverrides) })}
-          </p>
-        ) : null}
-
-        <div className={styles.actions}>
-          <Button
-            variant="primary"
-            disabled={state.applying || !state.writable || target === undefined || rows.length === 0}
-            onClick={() => { if (target !== undefined) void controller.apply(target) }}
-          >
-            {state.applying ? t('applying') : t('apply')}
-          </Button>
-        </div>
-
-        {state.status === 'ready' && !state.writable
-          ? <p className={styles.notice}>{t('readOnly')}</p>
-          : null}
-        {state.savedWindow === null || state.savedWindow !== target ? null : (
-          <p className={styles.saved} role="status" aria-live="polite">
-            {fill(t('saved'), { window: formatCapacity(state.savedWindow) })}
-          </p>
-        )}
-        {state.partialWrite === null ? null : (
-          <p className={styles.notice} role="status" aria-live="polite">
-            {fill(t('partiallySaved'), {
-              applied: String(state.partialWrite.applied),
-              total: String(state.partialWrite.total),
-            })}
-          </p>
-        )}
-        {state.writeFailure === null ? null : (
-          <p className={styles.error}>{writeFailureText(state.writeFailure, t)}</p>
-        )}
-      </div>
-
-      {state.status !== 'ready' ? null : rows.length === 0 ? (
+      {state.routes.length === 0 ? (
         <p className={styles.notice}>{t('noRoutes')}</p>
       ) : (
         <div className={styles.card}>
-          <span className={styles.label}>{t('routesLabel')}</span>
+          <div className={styles.cardHead}>
+            <span className={styles.label}>{t('providerGroupLabel')}</span>
+            {state.current !== undefined ? (
+              <span className={styles.current}>
+                {fill(t('current'), { window: formatCapacity(state.current) })}
+              </span>
+            ) : null}
+          </div>
+
           <ul className={styles.routes}>
-            {rows.map(row => (
+            {state.routes.map(entry => (
               <RouteRow
-                key={row.key}
-                displayName={row.displayName}
-                outcome={row.outcome}
-                target={target}
+                key={entry.key}
+                displayName={entry.route.displayName}
+                models={entry.discovered}
+                baseline={computeBaseline(entry)}
+                ceilingsKnown={entry.ceilingsKnown}
+                routeKey={entry.key}
+                saveStatus={state.routeSaveResult[entry.key] ?? null}
+                saveError={state.routeSaveError[entry.key] ?? null}
+                onSave={handleSave}
                 t={t}
               />
             ))}
           </ul>
         </div>
+      )}
+
+      {state.status === 'ready' && !state.writable
+        ? <p className={styles.notice}>{t('readOnly')}</p>
+        : null}
+      {state.writeFailure === null ? null : (
+        <p className={styles.error}>{writeFailureText(state.writeFailure, t)}</p>
       )}
     </div>
   )
