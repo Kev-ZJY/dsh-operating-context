@@ -33,9 +33,7 @@
 }
 
 .card {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  padding: 12px 14px;
+  /* No outer border: the provider groups carry their own divider lines. */
   display: flex;
   flex-direction: column;
   gap: 8px;

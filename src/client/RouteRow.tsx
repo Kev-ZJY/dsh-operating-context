@@ -216,13 +216,6 @@ function ModelSelector({ model, baseline, draft, onChange, t }: ModelSelectorPro
           </div>
         ) : null}
       </div>
-
-      {/* Show ceiling hint when known */}
-      {model.contextWindow !== undefined ? (
-        <span className={styles.modelCeiling}>
-          {fill(t('modelCeiling'), { window: formatCapacity(model.contextWindow) })}
-        </span>
-      ) : null}
     </li>
   )
 }

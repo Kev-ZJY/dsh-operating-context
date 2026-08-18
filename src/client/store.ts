@@ -13,13 +13,20 @@ import {
 } from './api.ts'
 import { ceilingsOf, hasDiscoverableCeilings, routeKey } from './ceiling.ts'
 import { failureOf, WRITE_BLOCKED, type HostFailure } from './failure.ts'
-import { commonRequestedWindow, effectiveWindows, planRoute, planRouteWithModels, type RouteProfile } from './plan.ts'
+import { commonRequestedWindow, effectiveWindows, planRoute, planRouteWithModels, profileModels, type RouteProfile } from './plan.ts'
 import { writeBatches } from './write.ts'
 
 /** One configured route the page can show and write. */
 export interface RouteEntry extends RouteProfile {
   /** Stable identity for React keys and lookups. */
   key: string
+  /**
+   * The models this route serves, as the page lists them. Prefers the profile's
+   * own `models[]` rows (authoritative when present), falling back to whatever
+   * discovery reported. Distinct from {@link RouteProfile.discovered}, which
+   * stays the capacity list used to clamp writes.
+   */
+  models: readonly DiscoveredModel[]
 }
 
 /** Everything the section renders. */
@@ -114,11 +121,20 @@ export class OperatingContextStore {
       const routes: RouteEntry[] = await Promise.all(configured.map(async ({ route, profile }) => {
         const discovered = await this.describeCeilings(route)
         const allModels = await this.discoverAllModels(route)
+        // The profile's own models[] rows are the authoritative list when
+        // present (they replace the served catalog). Fall back to the adapter's
+        // discovery only when the profile declares none.
+        const listed = profileModels(profile)
+        const models = listed.length > 0 ? listed : discovered ?? allModels
         return {
           key: routeKey(route),
           route,
           profile,
-          discovered: discovered ?? allModels.length > 0 ? allModels : [],
+          // `discovered` stays the capacity list used to clamp writes; a
+          // profile-declared models[] is authoritative for display but is not a
+          // ceiling, so it must not leak into ceilingsKnown.
+          discovered: discovered ?? [],
+          models,
           ceilingsKnown: discovered !== undefined,
         }
       }))

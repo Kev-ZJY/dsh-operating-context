@@ -66,6 +66,67 @@ function ceilingMap(entry: RouteProfile): ReadonlyMap<string, number> {
 }
 
 /**
+ * The models a route actually serves, read from its profile's own `models[]`
+ * rows when present. A non-empty models list replaces the served catalog, so
+ * these rows are the authoritative list of what the user configured — they are
+ * what the official Models page edits and what discovery cannot see when the
+ * adapter ships no catalog (e.g. `llm-deepseek`).
+ * @param profile - the route's settings profile.
+ * @returns the models declared in the profile, with the fields the page shows.
+ */
+export function profileModels(profile: unknown): DiscoveredModel[] {
+  const rows = modelRows(profile) ?? []
+  const models: DiscoveredModel[] = []
+  for (const row of rows) {
+    const id = typeof row['id'] === 'string' ? row['id'] : undefined
+    if (id === undefined) continue
+    const name = typeof row['name'] === 'string' ? row['name'] : undefined
+    const contextWindow = typeof row['contextWindow'] === 'number'
+      && Number.isSafeInteger(row['contextWindow']) && row['contextWindow'] > 0
+      ? row['contextWindow']
+      : undefined
+    models.push({ id, name, contextWindow })
+  }
+  return models
+}
+
+/**
+ * The window each model holds right now, keyed by model id. Follows the same
+ * precedence the adapter applies (`entry.contextWindow ?? catalog.contextWindow
+ * ?? defaultContextWindow`) so the page reports the value that is actually in
+ * force, not a raw setting that the next resolution step would override.
+ * @param entry - the route joined with its profile.
+ * @returns model id to effective window; a model with no resolvable value is absent.
+ */
+export function modelBaselines(entry: RouteProfile): Map<string, number> {
+  const baselines = new Map<string, number>()
+  const { defaultContextWindow } = asProfile(entry.profile)
+  const fallback = typeof defaultContextWindow === 'number' && defaultContextWindow > 0
+    ? defaultContextWindow
+    : undefined
+  const rows = modelRows(entry.profile)
+  if (rows !== undefined) {
+    for (const row of rows) {
+      const id = typeof row['id'] === 'string' ? row['id'] : undefined
+      if (id === undefined) continue
+      const declared = row['contextWindow']
+      const value = typeof declared === 'number' && declared > 0 ? declared : fallback
+      if (value !== undefined) baselines.set(id, value)
+    }
+    return baselines
+  }
+  const ceilings = ceilingMap(entry)
+  for (const model of entry.discovered) {
+    const patched = overrideEntry(entry.profile, model.id)?.['contextWindow']
+    const value = typeof patched === 'number' && patched > 0
+      ? patched
+      : ceilings.get(model.id) ?? fallback
+    if (value !== undefined) baselines.set(model.id, value)
+  }
+  return baselines
+}
+
+/**
  * Recover the operating window last chosen through this page.
  *
  * Applying a window always writes the same `defaultContextWindow` marker to

@@ -5,9 +5,9 @@
  */
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import { formatCapacity } from './capacity.ts'
 import { writeFailureText } from './failure.ts'
-import { fill, type OperatingContextKey } from './locales.ts'
+import { type OperatingContextKey } from './locales.ts'
+import { modelBaselines } from './plan.ts'
 import { RouteRow } from './RouteRow.tsx'
 import styles from './Section.module.css'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
@@ -22,36 +22,6 @@ export interface OperatingContextInjected {
 
 /** Props delivered by the slot outlet, which cannot promise the inject face. */
 export type OperatingContextSectionProps = Partial<OperatingContextInjected>
-
-/**
- * Compute the baseline effective window per model for one route entry.
- * This reads the current effective value from the profile (override >> default).
- */
-function computeBaseline(entry: { profile: unknown; discovered: readonly { id: string }[] }): Map<string, number> {
-  const baseline = new Map<string, number>()
-  if (typeof entry.profile !== 'object' || entry.profile === null) return baseline
-
-  const { modelOverrides, defaultContextWindow } = entry.profile as Record<string, unknown>
-  const defaultNum = typeof defaultContextWindow === 'number'
-    && Number.isSafeInteger(defaultContextWindow) && defaultContextWindow > 0
-    ? defaultContextWindow
-    : undefined
-
-  for (const model of entry.discovered) {
-    let value = defaultNum
-    if (typeof modelOverrides === 'object' && modelOverrides !== null) {
-      const override = (modelOverrides as Record<string, unknown>)[model.id]
-      if (typeof override === 'object' && override !== null) {
-        const cw = (override as Record<string, unknown>)['contextWindow']
-        if (typeof cw === 'number') value = cw
-      }
-    }
-    if (value !== undefined) {
-      baseline.set(model.id, value)
-    }
-  }
-  return baseline
-}
 
 /**
  * Render the operating-window section.
@@ -105,22 +75,13 @@ function Loaded({ controller, useSnapshot, t }: OperatingContextInjected): React
         <p className={styles.notice}>{t('noRoutes')}</p>
       ) : (
         <div className={styles.card}>
-          <div className={styles.cardHead}>
-            <span className={styles.label}>{t('providerGroupLabel')}</span>
-            {state.current !== undefined ? (
-              <span className={styles.current}>
-                {fill(t('current'), { window: formatCapacity(state.current) })}
-              </span>
-            ) : null}
-          </div>
-
           <ul className={styles.routes}>
             {state.routes.map(entry => (
               <RouteRow
                 key={entry.key}
                 displayName={entry.route.displayName}
-                models={entry.discovered}
-                baseline={computeBaseline(entry)}
+                models={entry.models}
+                baseline={modelBaselines(entry)}
                 ceilingsKnown={entry.ceilingsKnown}
                 routeKey={entry.key}
                 saveStatus={state.routeSaveResult[entry.key] ?? null}

@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import {
   commonRequestedWindow,
   effectiveWindows,
+  modelBaselines,
   obsoleteOverrideIds,
   planRoute,
+  profileModels,
   type RouteProfile,
 } from '../src/client/plan.ts'
 import type { DiscoveredModel, ProviderTarget } from '../src/client/api.ts'
@@ -335,4 +337,63 @@ test('a saved choice is only inferred when every route carries the same valid ma
     entry({ settingsPath: ['providers', 'second'], profile: {} }),
   ]), undefined)
   assert.equal(commonRequestedWindow([]), undefined)
+})
+
+test('profileModels reads the models a profile declares, skipping rows without an id', () => {
+  assert.deepEqual(profileModels({
+    defaultContextWindow: 128_000,
+    models: [
+      { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: 128_000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 128_000 },
+    ],
+  }), [
+    { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: 128_000 },
+    { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 128_000 },
+  ])
+  assert.deepEqual(profileModels({ models: [{ name: 'no-id' }, { id: 7 }] }), [])
+  assert.deepEqual(profileModels({ apiKeyEnv: 'DEMO_KEY' }), [])
+  assert.deepEqual(profileModels(undefined), [])
+})
+
+test('profileModels preserves fields beyond id/name/contextWindow on the row', () => {
+  const models = profileModels({
+    models: [{ id: 'vision', name: 'Vision', contextWindow: 200_000, maxTokens: 4_096, foo: 'bar' }],
+  })
+  assert.deepEqual(models, [{ id: 'vision', name: 'Vision', contextWindow: 200_000 }])
+})
+
+test('modelBaselines reports the window in force on a profile models list', () => {
+  // Row-level contextWindow is the current value; a row without one falls back
+  // to the route default.
+  assert.deepEqual([...modelBaselines(entry({
+    ceilingsKnown: false,
+    profile: {
+      defaultContextWindow: 400_000,
+      models: [{ id: 'a', contextWindow: 256_000 }, { id: 'b' }],
+    },
+  }))], [['a', 256_000], ['b', 400_000]])
+})
+
+test('modelBaselines reads override, then ceiling, then default on catalog routes', () => {
+  const baselines = modelBaselines(entry({
+    ceilingsKnown: true,
+    profile: {
+      defaultContextWindow: 400_000,
+      modelOverrides: { patched: { contextWindow: 128_000 } },
+    },
+    discovered: [
+      { id: 'patched', contextWindow: 1_000_000 },
+      { id: 'catalog', contextWindow: 256_000 },
+      { id: 'silent' },
+    ],
+  }))
+  assert.deepEqual([...baselines], [['patched', 128_000], ['catalog', 256_000], ['silent', 400_000]])
+})
+
+test('modelBaselines is empty when nothing resolves a window', () => {
+  assert.deepEqual([...modelBaselines(entry({
+    ceilingsKnown: false,
+    profile: { apiKeyEnv: 'DEMO_KEY' },
+    discovered: [],
+  }))], [])
 })
