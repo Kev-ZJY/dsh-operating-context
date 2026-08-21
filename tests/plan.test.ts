@@ -6,6 +6,7 @@ import {
   modelBaselines,
   obsoleteOverrideIds,
   planRoute,
+  planRouteWithModels,
   profileModels,
   type RouteProfile,
 } from '../src/client/plan.ts'
@@ -396,4 +397,151 @@ test('modelBaselines is empty when nothing resolves a window', () => {
     profile: { apiKeyEnv: 'DEMO_KEY' },
     discovered: [],
   }))], [])
+})
+
+// ---------------------------------------------------------------------------
+// planRouteWithModels — strict per-model semantics
+// ---------------------------------------------------------------------------
+
+test('editing one catalog model writes only that override and never the default', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: { defaultContextWindow: 1_000_000, modelOverrides: {} },
+      discovered: [
+        { id: 'model-a', contextWindow: 1_000_000 },
+        { id: 'model-b', contextWindow: 1_000_000 },
+        { id: 'model-c', contextWindow: 1_000_000 },
+      ],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 256_000]]),
+  )
+
+  // The shared default must never be rewritten by a single-model edit.
+  assert.ok(!ops.some(op => op.op === 'set' && op.path.includes('defaultContextWindow')))
+  assert.deepEqual(ops, [
+    { op: 'set', path: ['providers', 'demo', 'modelOverrides', 'model-a', 'contextWindow'], value: 256_000 },
+  ])
+})
+
+test('editing one catalog model does not touch modelOverrides of the others', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: {
+        defaultContextWindow: 400_000,
+        modelOverrides: { 'model-b': { contextWindow: 128_000 } },
+      },
+      discovered: [
+        { id: 'model-a', contextWindow: 1_000_000 },
+        { id: 'model-b', contextWindow: 1_000_000 },
+        { id: 'model-c', contextWindow: 1_000_000 },
+      ],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 256_000]]),
+  )
+
+  assert.deepEqual(ops, [
+    { op: 'set', path: ['providers', 'demo', 'modelOverrides', 'model-a', 'contextWindow'], value: 256_000 },
+  ])
+})
+
+test('a catalog override is clamped to the model ceiling', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: {
+        defaultContextWindow: 1_000_000,
+        modelOverrides: { 'model-a': { contextWindow: 128_000 } },
+      },
+      discovered: [{ id: 'model-a', contextWindow: 200_000 }],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 400_000]]),
+  )
+
+  // 400K exceeds the 200K ceiling, so the override is clamped to 200K. It is
+  // still written because the model currently holds 128K, not the ceiling.
+  assert.deepEqual(ops, [
+    { op: 'set', path: ['providers', 'demo', 'modelOverrides', 'model-a', 'contextWindow'], value: 200_000 },
+  ])
+})
+
+test('a target above the ceiling that matches the current value is a no-op', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: { defaultContextWindow: 1_000_000, modelOverrides: {} },
+      discovered: [{ id: 'model-a', contextWindow: 200_000 }],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 400_000]]),
+  )
+
+  // The clamp lands on 200K, which the model already holds via its ceiling —
+  // writing a redundant override would add nothing, so no operation is emitted.
+  assert.deepEqual(ops, [])
+})
+
+test('a catalog override with an unknown ceiling is capped at 1024K', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: { defaultContextWindow: 400_000, modelOverrides: {} },
+      discovered: [{ id: 'model-a' }],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 2_000_000]]),
+  )
+
+  assert.deepEqual(ops, [
+    { op: 'set', path: ['providers', 'demo', 'modelOverrides', 'model-a', 'contextWindow'], value: 1_024_000 },
+  ])
+})
+
+test('a target equal to the natural value removes a stale override and writes nothing new', () => {
+  const ops = planRouteWithModels(
+    entry({
+      profile: {
+        defaultContextWindow: 400_000,
+        modelOverrides: { 'model-a': { contextWindow: 400_000 } },
+      },
+      discovered: [{ id: 'model-a', contextWindow: 1_000_000 }],
+      ceilingsKnown: true,
+    }),
+    new Map([['model-a', 400_000]]),
+  )
+
+  // natural value = min(400_000 default, 1_000_000 ceiling) = 400_000 == target,
+  // so the redundant override is removed, not restated.
+  assert.deepEqual(ops, [
+    { op: 'unset', path: ['providers', 'demo', 'modelOverrides', 'model-a'] },
+  ])
+})
+
+test('editing one model on a models[] route touches only that row and never the default', () => {
+  const ops = planRouteWithModels(
+    entry({
+      ceilingsKnown: false,
+      profile: {
+        defaultContextWindow: 400_000,
+        models: [
+          { id: 'claude-large', name: 'Large', contextWindow: 800_000, maxTokens: 64_000 },
+          { id: 'claude-small', name: 'Small', contextWindow: 200_000, maxTokens: 8_000 },
+        ],
+      },
+    }),
+    new Map([['claude-large', 1_000_000]]),
+  )
+
+  // No defaultContextWindow write; only the edited row changes (capped at
+  // 1024K because ceilings are unknown); the other row is untouched.
+  assert.ok(!ops.some(op => op.op === 'set' && op.path.includes('defaultContextWindow')))
+  assert.deepEqual(ops, [
+    {
+      op: 'set',
+      path: ['providers', 'demo', 'models'],
+      value: [
+        { id: 'claude-large', name: 'Large', contextWindow: 1_000_000, maxTokens: 64_000 },
+        { id: 'claude-small', name: 'Small', contextWindow: 200_000, maxTokens: 8_000 },
+      ],
+    },
+  ])
 })
